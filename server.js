@@ -439,6 +439,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`JSY Edu Bookkeeper bot running on port ${PORT}`);
 });
- ls -la
 
 
