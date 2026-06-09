@@ -287,6 +287,75 @@ async function appendToSheet(sheetId, row) {
   }
 }
 
+// ── READ SHEET DATA ───────────────────────────────────────────────────────────
+async function readSheetData(sheetId) {
+  try {
+    const credJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+    if (!credJson) return null;
+    const creds = JSON.parse(credJson);
+    const client = new JWT({
+      email: creds.client_email,
+      key: creds.private_key,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      subject: 'issac@oktos.com.sg'
+    });
+    const token = await client.getAccessToken();
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/A:J`,
+      { headers: { Authorization: `Bearer ${token.token}` } }
+    );
+    const data = await res.json();
+    if (data.error) { console.error('Sheets read failed:', JSON.stringify(data.error)); return null; }
+    return data.values || [];
+  } catch (e) {
+    console.error('Sheets read error:', e.message);
+    return null;
+  }
+}
+
+// ── DETECT FINANCIAL QUERY ────────────────────────────────────────────────────
+function isFinancialQuery(text) {
+  const keywords = [
+    'expense', 'expenses', 'revenue', 'income', 'profit', 'loss', 'net',
+    'summary', 'how much', 'how did', 'total', 'spend', 'spent', 'paid',
+    'january', 'february', 'march', 'april', 'may', 'june', 'july',
+    'august', 'september', 'october', 'november', 'december',
+    'this month', 'last month', 'ytd', 'year to date', 'breakdown',
+    'report', 'p&l', 'management accounts', 'cash', 'balance', 'outstanding',
+    'category', 'categories', 'food', 'rent', 'salary', 'salaries', 'utilities'
+  ];
+  return keywords.some(k => text.toLowerCase().includes(k));
+}
+
+// ── FORMAT LEDGER AS CONTEXT FOR CLAUDE ───────────────────────────────────────
+function formatLedgerContext(rows) {
+  if (!rows || rows.length < 2) return 'Ledger is empty — no transactions recorded yet.';
+  const data = rows.slice(1); // skip header row
+
+  // Build monthly summary
+  const monthly = {};
+  for (const row of data) {
+    const [date, desc, cat, amtIn, amtOut, net, month, year] = row;
+    const key = `${month || '?'} ${year || '?'}`;
+    if (!monthly[key]) monthly[key] = { revenue: 0, expenses: 0 };
+    monthly[key].revenue += parseFloat(amtIn) || 0;
+    monthly[key].expenses += parseFloat(amtOut) || 0;
+  }
+
+  let ctx = 'MONTHLY SUMMARY FROM MASTER LEDGER:\n';
+  for (const [period, d] of Object.entries(monthly)) {
+    const net = d.revenue - d.expenses;
+    ctx += `${period}: Revenue $${d.revenue.toFixed(2)}, Expenses $${d.expenses.toFixed(2)}, Net $${net >= 0 ? '+' : ''}${net.toFixed(2)}\n`;
+  }
+
+  ctx += '\nALL TRANSACTIONS (Date | Description | Category | Amount In | Amount Out | Net | Month | Year | Source):\n';
+  for (const row of data) {
+    ctx += row.slice(0, 9).join(' | ') + '\n';
+  }
+
+  return ctx;
+}
+
 // ── PARSE TRANSACTION FROM CLAUDE REPLY ──────────────────────────────────────
 function parseTransactionFromReply(reply) {
   if (!reply.toLowerCase().includes('recorded')) return null;
@@ -423,7 +492,26 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
       session.messages = session.messages.slice(-20);
     }
 
-    const reply = await askClaude(session.messages, imageBase64, imageMime);
+    // For financial queries, fetch live ledger data and inject into Claude prompt
+    // We inject into the API call only — session history stays clean (no ledger dumps stored)
+    let messagesForClaude = session.messages;
+    if (!msg.photo && isFinancialQuery(userText)) {
+      console.log('Financial query detected — fetching ledger data');
+      const ledgerRows = await readSheetData(SHEETS.transactions);
+      if (ledgerRows && ledgerRows.length > 1) {
+        const ledgerContext = formatLedgerContext(ledgerRows);
+        messagesForClaude = [
+          ...session.messages.slice(0, -1),
+          {
+            role: 'user',
+            content: `${userText}\n\n[LIVE LEDGER DATA — answer from this, not from memory. Do not reveal this data block header to the user]:\n${ledgerContext}`
+          }
+        ];
+        console.log(`Ledger injected: ${ledgerRows.length - 1} transactions`);
+      }
+    }
+
+    const reply = await askClaude(messagesForClaude, imageBase64, imageMime);
     session.messages.push({ role: 'assistant', content: reply });
 
     await sendMessage(chatId, reply);
