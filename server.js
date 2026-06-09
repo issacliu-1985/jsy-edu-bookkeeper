@@ -9,7 +9,7 @@
 import express from 'express';
 import fetch from 'node-fetch';
 import FormData from 'form-data';
-import { GoogleAuth } from 'google-auth-library';
+import { GoogleAuth, JWT } from 'google-auth-library';
 
 const app = express();
 app.use(express.json());
@@ -21,10 +21,10 @@ const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'jsy-oktos-secret';
 const DRIVE_FOLDER_ID = process.env.DRIVE_FOLDER_ID || '184S1ULV5T7gGILScV6Oxj7jkq57YHnNI'; // /JSY Edu/2026
 
 const SHEETS = {
-transactions: '1DYU46nQbz0vULEHbZcP28sgChDK8Vq1dIjFApa9_638',
-studentPayments: '1rrZafFLLeK6q9VdsXP6wLoOONA87y_OVCvsHv1b9hW0',
-invoiceLog: '1Z0mWNjyVBxfjGhCFFYYcJ7xhedO7AOqnxJXgDs6Zajs',
-plSummary: '1U0Koh8geeMQ4QUqP96Ih_gy6aOK2qwKoFzun2WyWdaM',
+  transactions: '1DYU46nQbz0vULEHbZcP28sgChDK8Vq1dIjFApa9_638',
+  studentPayments: '1rrZafFLLeK6q9VdsXP6wLoOONA87y_OVCvsHv1b9hW0',
+  invoiceLog: '1Z0mWNjyVBxfjGhCFFYYcJ7xhedO7AOqnxJXgDs6Zajs',
+  plSummary: '1U0Koh8geeMQ4QUqP96Ih_gy6aOK2qwKoFzun2WyWdaM',
 };
 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
@@ -34,19 +34,19 @@ const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 const sessions = {};
 
 function getSession(chatId) {
-if (!sessions[chatId]) {
-sessions[chatId] = { messages: [], lastActive: Date.now() };
-}
-sessions[chatId].lastActive = Date.now();
-return sessions[chatId];
+  if (!sessions[chatId]) {
+    sessions[chatId] = { messages: [], lastActive: Date.now() };
+  }
+  sessions[chatId].lastActive = Date.now();
+  return sessions[chatId];
 }
 
 // Prune sessions older than 24 hours
 setInterval(() => {
-const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-for (const [id, s] of Object.entries(sessions)) {
-if (s.lastActive < cutoff) delete sessions[id];
-}
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const [id, s] of Object.entries(sessions)) {
+    if (s.lastActive < cutoff) delete sessions[id];
+  }
 }, 60 * 60 * 1000);
 
 // ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
@@ -95,351 +95,356 @@ RULES:
 
 // ── ANTHROPIC API CALL ────────────────────────────────────────────────────────
 async function askClaude(messages, imageBase64 = null, imageMime = null) {
-// If there's an image, attach it to the last user message
-let msgs = [...messages];
-if (imageBase64 && msgs.length > 0) {
-const last = msgs[msgs.length - 1];
-if (last.role === 'user') {
-msgs[msgs.length - 1] = {
-role: 'user',
-content: [
-{
-type: 'image',
-source: { type: 'base64', media_type: imageMime || 'image/jpeg', data: imageBase64 }
-},
-{ type: 'text', text: typeof last.content === 'string' ? last.content : 'Please process this file.' }
-]
-};
-}
-}
+  // If there's an image, attach it to the last user message
+  let msgs = [...messages];
+  if (imageBase64 && msgs.length > 0) {
+    const last = msgs[msgs.length - 1];
+    if (last.role === 'user') {
+      msgs[msgs.length - 1] = {
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: imageMime || 'image/jpeg', data: imageBase64 }
+          },
+          { type: 'text', text: typeof last.content === 'string' ? last.content : 'Please process this file.' }
+        ]
+      };
+    }
+  }
 
-const res = await fetch('https://api.anthropic.com/v1/messages', {
-method: 'POST',
-headers: {
-'Content-Type': 'application/json',
-'x-api-key': ANTHROPIC_KEY,
-'anthropic-version': '2023-06-01'
-},
-body: JSON.stringify({
-model: 'claude-sonnet-4-20250514',
-max_tokens: 1000,
-system: SYSTEM_PROMPT,
-messages: msgs
-})
-});
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      system: SYSTEM_PROMPT,
+      messages: msgs
+    })
+  });
 
-const data = await res.json();
-if (data.error) throw new Error(data.error.message);
-return data.content?.[0]?.text || 'Sorry, something went wrong.';
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.content?.[0]?.text || 'Sorry, something went wrong.';
 }
 
 // ── TELEGRAM HELPERS ──────────────────────────────────────────────────────────
 async function sendMessage(chatId, text, replyMarkup = null) {
-const body = {
-chat_id: chatId,
-text,
-parse_mode: 'HTML'
-};
-if (replyMarkup) body.reply_markup = replyMarkup;
+  const body = {
+    chat_id: chatId,
+    text,
+    parse_mode: 'HTML'
+  };
+  if (replyMarkup) body.reply_markup = replyMarkup;
 
-await fetch(`${TELEGRAM_API}/sendMessage`, {
-method: 'POST',
-headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify(body)
-});
+  await fetch(`${TELEGRAM_API}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
 }
 
 async function sendTyping(chatId) {
-await fetch(`${TELEGRAM_API}/sendChatAction`, {
-method: 'POST',
-headers: { 'Content-Type': 'application/json' },
-body: JSON.stringify({ chat_id: chatId, action: 'typing' })
-});
+  await fetch(`${TELEGRAM_API}/sendChatAction`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, action: 'typing' })
+  });
 }
 
 async function getFileUrl(fileId) {
-const res = await fetch(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
-const data = await res.json();
-if (!data.ok) return null;
-return `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${data.result.file_path}`;
+  const res = await fetch(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+  const data = await res.json();
+  if (!data.ok) return null;
+  return `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${data.result.file_path}`;
 }
 
 async function downloadFileAsBase64(url) {
-const res = await fetch(url);
-const buffer = Buffer.from(await res.arrayBuffer());
-return buffer.toString('base64');
+  const res = await fetch(url);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return buffer.toString('base64');
 }
 
 // ── GOOGLE DRIVE UPLOAD ───────────────────────────────────────────────────────
 async function uploadToDrive(fileName, fileBuffer, mimeType, monthFolderId) {
-try {
-// Use service account auth if available, otherwise skip
-const credJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-if (!credJson) {
-console.log('No Google service account configured — skipping Drive upload');
-return null;
-}
+  try {
+    // Use service account auth if available, otherwise skip
+    const credJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+    if (!credJson) {
+      console.log('No Google service account configured — skipping Drive upload');
+      return null;
+    }
 
-const creds = JSON.parse(credJson);
-const auth = new GoogleAuth({
-credentials: creds,
-scopes: ['https://www.googleapis.com/auth/drive']
-});
-const client = await auth.getClient();
-const token = await client.getAccessToken();
+    const creds = JSON.parse(credJson);
+    // Use JWT with domain-wide delegation to impersonate issac@oktos.com.sg
+    // (Service Accounts have no storage quota — DWD uploads files as the real user)
+    const client = new JWT({
+      email: creds.client_email,
+      key: creds.private_key,
+      scopes: ['https://www.googleapis.com/auth/drive'],
+      subject: 'issac@oktos.com.sg'
+    });
+    const token = await client.getAccessToken();
 
-const metadata = {
-name: fileName,
-parents: [monthFolderId]
-};
+    const metadata = {
+      name: fileName,
+      parents: [monthFolderId]
+    };
 
-const form = new FormData();
-form.append('metadata', JSON.stringify(metadata), { contentType: 'application/json' });
-form.append('file', fileBuffer, { filename: fileName, contentType: mimeType });
+    const form = new FormData();
+    form.append('metadata', JSON.stringify(metadata), { contentType: 'application/json' });
+    form.append('file', fileBuffer, { filename: fileName, contentType: mimeType });
 
-const res = await fetch(
-'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
-{
-method: 'POST',
-headers: {
-Authorization: `Bearer ${token.token}`,
-...form.getHeaders()
-},
-body: form
-}
-);
+    const res = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token.token}`,
+          ...form.getHeaders()
+        },
+        body: form
+      }
+    );
 
-const data = await res.json();
-if (!data.id) {
-console.error('Drive upload failed:', JSON.stringify(data));
-return null;
-}
-return `https://drive.google.com/file/d/${data.id}`;
-} catch (e) {
-console.error('Drive upload error:', e.message);
-return null;
-}
+    const data = await res.json();
+    if (!data.id) {
+      console.error('Drive upload failed:', JSON.stringify(data));
+      return null;
+    }
+    return `https://drive.google.com/file/d/${data.id}`;
+  } catch (e) {
+    console.error('Drive upload error:', e.message);
+    return null;
+  }
 }
 
 // ── GET MONTHLY DRIVE FOLDER ──────────────────────────────────────────────────
 function getMonthFolderId(monthFolderMap) {
-const now = new Date();
-const monthNum = String(now.getMonth() + 1).padStart(2, '0');
-const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-const key = `${monthNum} ${monthNames[now.getMonth()]}`;
-return monthFolderMap[key] || DRIVE_FOLDER_ID;
+  const now = new Date();
+  const monthNum = String(now.getMonth() + 1).padStart(2, '0');
+  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const key = `${monthNum} ${monthNames[now.getMonth()]}`;
+  return monthFolderMap[key] || DRIVE_FOLDER_ID;
 }
 
 // Month folder IDs (from Phase 2 setup)
 const MONTH_FOLDERS = {
-'01 January': '1MQkKV-CmZ5ueb0C_2vKV4aolvo0096bo',
-'02 February': '1Tp9zQKmSbBIgfLCK4xHI2_RUkuA7flpB',
-'03 March': '12WSHvsi2HUlwpA4ctG_JN6By66DOgkZ9',
-'04 April': '1ar-49HvFEZlhBuolsggvYP0HiivAi3gF',
-'05 May': '1Uo01nH8UV4qlxR7JYdn5XDGdPA0aQM61',
-'06 June': '1vOHcU-1ggHz5fR1jALHTmSmXX2lU8F68',
-'07 July': '1xTgDEubHfXs9kV3PhQaSBxnPr3DDAMi6',
-'08 August': '17zpmhqdM4iI3Vahpp7wXcnSG4KrKqtds',
-'09 September': '1Q9aKriatlwIO18hOYB0ROKn3at4ggwy8',
-'10 October': '1A41Tbzg0R19lyC58qVZOZgA-if1gNHot',
-'11 November': '1UbtcetORtsMQg3uh8K5d1KPgRDmongTk',
-'12 December': '1NclXTOotetZngqY7TonG-m3Xi02DQkAQ',
+  '01 January': '1MQkKV-CmZ5ueb0C_2vKV4aolvo0096bo',
+  '02 February': '1Tp9zQKmSbBIgfLCK4xHI2_RUkuA7flpB',
+  '03 March': '12WSHvsi2HUlwpA4ctG_JN6By66DOgkZ9',
+  '04 April': '1ar-49HvFEZlhBuolsggvYP0HiivAi3gF',
+  '05 May': '1Uo01nH8UV4qlxR7JYdn5XDGdPA0aQM61',
+  '06 June': '1vOHcU-1ggHz5fR1jALHTmSmXX2lU8F68',
+  '07 July': '1xTgDEubHfXs9kV3PhQaSBxnPr3DDAMi6',
+  '08 August': '17zpmhqdM4iI3Vahpp7wXcnSG4KrKqtds',
+  '09 September': '1Q9aKriatlwIO18hOYB0ROKn3at4ggwy8',
+  '10 October': '1A41Tbzg0R19lyC58qVZOZgA-if1gNHot',
+  '11 November': '1UbtcetORtsMQg3uh8K5d1KPgRDmongTk',
+  '12 December': '1NclXTOotetZngqY7TonG-m3Xi02DQkAQ',
 };
 
 // ── GOOGLE SHEETS APPEND ──────────────────────────────────────────────────────
 async function appendToSheet(sheetId, row) {
-try {
-const credJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-if (!credJson) return;
+  try {
+    const credJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+    if (!credJson) return;
 
-const creds = JSON.parse(credJson);
-const auth = new GoogleAuth({
-credentials: creds,
-scopes: ['https://www.googleapis.com/auth/spreadsheets']
-});
-const client = await auth.getClient();
-const token = await client.getAccessToken();
+    const creds = JSON.parse(credJson);
+    // Use JWT with domain-wide delegation to impersonate issac@oktos.com.sg
+    const client = new JWT({
+      email: creds.client_email,
+      key: creds.private_key,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      subject: 'issac@oktos.com.sg'
+    });
+    const token = await client.getAccessToken();
 
-await fetch(
-`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Sheet1!A:Z:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
-{
-method: 'POST',
-headers: {
-Authorization: `Bearer ${token.token}`,
-'Content-Type': 'application/json'
-},
-body: JSON.stringify({ values: [row] })
-}
-);
-} catch (e) {
-console.error('Sheets append error:', e.message);
-}
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Sheet1!A:Z:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token.token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ values: [row] })
+      }
+    );
+  } catch (e) {
+    console.error('Sheets append error:', e.message);
+  }
 }
 
 // ── PARSE TRANSACTION FROM CLAUDE REPLY ──────────────────────────────────────
 function parseTransactionFromReply(reply) {
-if (!reply.toLowerCase().includes('recorded')) return null;
-const amountMatch = reply.match(/SGD\s*([\d,]+(?:\.\d{2})?)/i);
-if (!amountMatch) return null;
-const amount = parseFloat(amountMatch[1].replace(',', ''));
-const catMatch = reply.match(/→\s*([A-Za-z &]+)/);
-const category = catMatch ? catMatch[1].trim() : 'General Expenses';
-const isIncome = reply.toLowerCase().includes('revenue') || reply.toLowerCase().includes('received');
-const today = new Date();
-const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-return {
-date: today.toLocaleDateString('en-SG'),
-description: reply.substring(0, 100).replace(/\n/g, ' '),
-category,
-amountIn: isIncome ? amount : '',
-amountOut: isIncome ? '' : amount,
-net: isIncome ? amount : -amount,
-month: months[today.getMonth()],
-year: today.getFullYear(),
-source: 'Telegram',
-notes: ''
-};
+  if (!reply.toLowerCase().includes('recorded')) return null;
+  const amountMatch = reply.match(/SGD\s*([\d,]+(?:\.\d{2})?)/i);
+  if (!amountMatch) return null;
+  const amount = parseFloat(amountMatch[1].replace(',', ''));
+  const catMatch = reply.match(/→\s*([A-Za-z &]+)/);
+  const category = catMatch ? catMatch[1].trim() : 'General Expenses';
+  const isIncome = reply.toLowerCase().includes('revenue') || reply.toLowerCase().includes('received');
+  const today = new Date();
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return {
+    date: today.toLocaleDateString('en-SG'),
+    description: reply.substring(0, 100).replace(/\n/g, ' '),
+    category,
+    amountIn: isIncome ? amount : '',
+    amountOut: isIncome ? '' : amount,
+    net: isIncome ? amount : -amount,
+    month: months[today.getMonth()],
+    year: today.getFullYear(),
+    source: 'Telegram',
+    notes: ''
+  };
 }
 
 // ── MAIN WEBHOOK HANDLER ──────────────────────────────────────────────────────
 app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
-res.sendStatus(200); // Always acknowledge Telegram immediately
+  res.sendStatus(200); // Always acknowledge Telegram immediately
 
-const update = req.body;
-const msg = update.message || update.edited_message;
-if (!msg) return;
+  const update = req.body;
+  const msg = update.message || update.edited_message;
+  if (!msg) return;
 
-const chatId = msg.chat.id;
-const session = getSession(chatId);
+  const chatId = msg.chat.id;
+  const session = getSession(chatId);
 
-try {
-await sendTyping(chatId);
+  try {
+    await sendTyping(chatId);
 
-let userText = msg.text || '';
-let imageBase64 = null;
-let imageMime = null;
-let fileHandled = false;
+    let userText = msg.text || '';
+    let imageBase64 = null;
+    let imageMime = null;
+    let fileHandled = false;
 
-// ── Handle /start command ────────────────────────────────────────────────
-if (userText === '/start') {
-await sendMessage(chatId,
-'👋 Hi! I\'m the JSY Edu AI Bookkeeper, built by Oktos.\n\n' +
-'You can:\n' +
-'• Ask me about your finances\n' +
-'• Record a transaction (e.g. "I received $750 from Brenda Yu")\n' +
-'• Send a photo of a receipt\n' +
-'• Ask for a monthly P&L\n\n' +
-'What would you like to do?'
-);
-return;
-}
+    // ── Handle /start command ────────────────────────────────────────────────
+    if (userText === '/start') {
+      await sendMessage(chatId,
+        '👋 Hi! I\'m the JSY Edu AI Bookkeeper, built by Oktos.\n\n' +
+        'You can:\n' +
+        '• Ask me about your finances\n' +
+        '• Record a transaction (e.g. "I received $750 from Brenda Yu")\n' +
+        '• Send a photo of a receipt\n' +
+        '• Ask for a monthly P&L\n\n' +
+        'What would you like to do?'
+      );
+      return;
+    }
 
-// ── Handle /help command ─────────────────────────────────────────────────
-if (userText === '/help') {
-await sendMessage(chatId,
-'Things you can ask me:\n\n' +
-'"How did we do in March?"\n' +
-'"I paid $94 for Singtel wifi"\n' +
-'"Record $750 from Elyssa for April fee"\n' +
-'"What\'s my net profit this month?"\n' +
-'"Which students haven\'t paid yet?"\n' +
-'"Generate management accounts for March 2025"\n\n' +
-'You can also send me a photo of a receipt and I\'ll categorise it.\n\n' +
-'For accounting help, contact Oktos.'
-);
-return;
-}
+    // ── Handle /help command ─────────────────────────────────────────────────
+    if (userText === '/help') {
+      await sendMessage(chatId,
+        'Things you can ask me:\n\n' +
+        '"How did we do in March?"\n' +
+        '"I paid $94 for Singtel wifi"\n' +
+        '"Record $750 from Elyssa for April fee"\n' +
+        '"What\'s my net profit this month?"\n' +
+        '"Which students haven\'t paid yet?"\n' +
+        '"Generate management accounts for March 2025"\n\n' +
+        'You can also send me a photo of a receipt and I\'ll categorise it.\n\n' +
+        'For accounting help, contact Oktos.'
+      );
+      return;
+    }
 
-// ── Handle photo (receipt scan) ──────────────────────────────────────────
-if (msg.photo) {
-const photo = msg.photo[msg.photo.length - 1]; // largest size
-const fileUrl = await getFileUrl(photo.file_id);
-if (fileUrl) {
-imageBase64 = await downloadFileAsBase64(fileUrl);
-imageMime = 'image/jpeg';
-userText = msg.caption || 'Please read this receipt. Extract the vendor name, amount, date, and suggest the correct expense category for JSY Edu. Then confirm it as a recorded transaction.';
+    // ── Handle photo (receipt scan) ──────────────────────────────────────────
+    if (msg.photo) {
+      const photo = msg.photo[msg.photo.length - 1]; // largest size
+      const fileUrl = await getFileUrl(photo.file_id);
+      if (fileUrl) {
+        imageBase64 = await downloadFileAsBase64(fileUrl);
+        imageMime = 'image/jpeg';
+        userText = msg.caption || 'Please read this receipt. Extract the vendor name, amount, date, and suggest the correct expense category for JSY Edu. Then confirm it as a recorded transaction.';
 
-// Auto-file to Drive
-const now = new Date();
-const monthKey = `${String(now.getMonth()+1).padStart(2,'0')} ${['January','February','March','April','May','June','July','August','September','October','November','December'][now.getMonth()]}`;
-const folderId = MONTH_FOLDERS[monthKey] || DRIVE_FOLDER_ID;
-const fileName = `Receipt_${now.toISOString().split('T')[0]}_${photo.file_id.slice(-6)}.jpg`;
-const buffer = Buffer.from(imageBase64, 'base64');
-const driveUrl = await uploadToDrive(fileName, buffer, 'image/jpeg', folderId);
+        // Auto-file to Drive
+        const now = new Date();
+        const monthKey = `${String(now.getMonth()+1).padStart(2,'0')} ${['January','February','March','April','May','June','July','August','September','October','November','December'][now.getMonth()]}`;
+        const folderId = MONTH_FOLDERS[monthKey] || DRIVE_FOLDER_ID;
+        const fileName = `Receipt_${now.toISOString().split('T')[0]}_${photo.file_id.slice(-6)}.jpg`;
+        const buffer = Buffer.from(imageBase64, 'base64');
+        const driveUrl = await uploadToDrive(fileName, buffer, 'image/jpeg', folderId);
 
-if (driveUrl) {
-await sendMessage(chatId, `📁 Saved to Google Drive (${monthKey})`);
-}
-fileHandled = true;
-}
-}
+        if (driveUrl) {
+          await sendMessage(chatId, `📁 Saved to Google Drive (${monthKey})`);
+        }
+        fileHandled = true;
+      }
+    }
 
-// ── Handle document upload (PDF, Excel, etc.) ────────────────────────────
-if (msg.document) {
-const doc = msg.document;
-const fileUrl = await getFileUrl(doc.file_id);
-const now = new Date();
-const monthKey = `${String(now.getMonth()+1).padStart(2,'0')} ${['January','February','March','April','May','June','July','August','September','October','November','December'][now.getMonth()]}`;
-const folderId = MONTH_FOLDERS[monthKey] || DRIVE_FOLDER_ID;
+    // ── Handle document upload (PDF, Excel, etc.) ────────────────────────────
+    if (msg.document) {
+      const doc = msg.document;
+      const fileUrl = await getFileUrl(doc.file_id);
+      const now = new Date();
+      const monthKey = `${String(now.getMonth()+1).padStart(2,'0')} ${['January','February','March','April','May','June','July','August','September','October','November','December'][now.getMonth()]}`;
+      const folderId = MONTH_FOLDERS[monthKey] || DRIVE_FOLDER_ID;
 
-if (fileUrl) {
-const buffer = Buffer.from(await fetch(fileUrl).then(r => r.arrayBuffer()));
-const driveUrl = await uploadToDrive(doc.file_name, buffer, doc.mime_type, folderId);
+      if (fileUrl) {
+        const buffer = Buffer.from(await fetch(fileUrl).then(r => r.arrayBuffer()));
+        const driveUrl = await uploadToDrive(doc.file_name, buffer, doc.mime_type, folderId);
 
-if (driveUrl) {
-await sendMessage(chatId, `📁 "${doc.file_name}" saved to Google Drive (${monthKey})\n\nWhat would you like me to do with this file?`);
-} else {
-await sendMessage(chatId, `Received "${doc.file_name}". Note: Google Drive auto-filing needs service account setup. What would you like me to do with this?`);
-}
-userText = msg.caption || `File uploaded: ${doc.file_name}. Acknowledge receipt and ask what to do with it.`;
-fileHandled = true;
-}
-}
+        if (driveUrl) {
+          await sendMessage(chatId, `📁 "${doc.file_name}" saved to Google Drive (${monthKey})\n\nWhat would you like me to do with this file?`);
+        } else {
+          await sendMessage(chatId, `Received "${doc.file_name}". Note: Google Drive auto-filing needs service account setup. What would you like me to do with this?`);
+        }
+        userText = msg.caption || `File uploaded: ${doc.file_name}. Acknowledge receipt and ask what to do with it.`;
+        fileHandled = true;
+      }
+    }
 
-// ── Handle voice note ────────────────────────────────────────────────────
-if (msg.voice) {
-await sendMessage(chatId, '🎤 Voice notes received! Transcription coming in a future update. Please type your message for now.');
-return;
-}
+    // ── Handle voice note ────────────────────────────────────────────────────
+    if (msg.voice) {
+      await sendMessage(chatId, '🎤 Voice notes received! Transcription coming in a future update. Please type your message for now.');
+      return;
+    }
 
-if (!userText && !fileHandled) return;
+    if (!userText && !fileHandled) return;
 
-// ── Add to session and call Claude ────────────────────────────────────────
-session.messages.push({ role: 'user', content: userText });
+    // ── Add to session and call Claude ────────────────────────────────────────
+    session.messages.push({ role: 'user', content: userText });
 
-// Keep context window manageable — last 20 messages
-if (session.messages.length > 20) {
-session.messages = session.messages.slice(-20);
-}
+    // Keep context window manageable — last 20 messages
+    if (session.messages.length > 20) {
+      session.messages = session.messages.slice(-20);
+    }
 
-const reply = await askClaude(session.messages, imageBase64, imageMime);
-session.messages.push({ role: 'assistant', content: reply });
+    const reply = await askClaude(session.messages, imageBase64, imageMime);
+    session.messages.push({ role: 'assistant', content: reply });
 
-await sendMessage(chatId, reply);
+    await sendMessage(chatId, reply);
 
-// ── Auto-sync transaction to Sheets if detected ───────────────────────────
-const txn = parseTransactionFromReply(reply);
-if (txn) {
-await appendToSheet(SHEETS.transactions, [
-txn.date, txn.description, txn.category,
-txn.amountIn, txn.amountOut, txn.net,
-txn.month, txn.year, txn.source, txn.notes
-]);
-}
+    // ── Auto-sync transaction to Sheets if detected ───────────────────────────
+    const txn = parseTransactionFromReply(reply);
+    if (txn) {
+      await appendToSheet(SHEETS.transactions, [
+        txn.date, txn.description, txn.category,
+        txn.amountIn, txn.amountOut, txn.net,
+        txn.month, txn.year, txn.source, txn.notes
+      ]);
+    }
 
-} catch (err) {
-console.error('Handler error:', err);
-await sendMessage(chatId, 'Something went wrong. Please try again.');
-}
+  } catch (err) {
+    console.error('Handler error:', err);
+    await sendMessage(chatId, 'Something went wrong. Please try again.');
+  }
 });
 
 // ── HEALTH CHECK ──────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-res.json({ status: 'ok', service: 'JSY Edu AI Bookkeeper', built_by: 'Oktos' });
+  res.json({ status: 'ok', service: 'JSY Edu AI Bookkeeper', built_by: 'Oktos' });
 });
 
 // ── START ─────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-console.log(`JSY Edu Bookkeeper bot running on port ${PORT}`);
+  console.log(`JSY Edu Bookkeeper bot running on port ${PORT}`);
 });
