@@ -253,7 +253,7 @@ const MONTH_FOLDERS = {
 async function appendToSheet(sheetId, row) {
   try {
     const credJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-    if (!credJson) return;
+    if (!credJson) { console.log('Sheets: no credentials'); return; }
 
     const creds = JSON.parse(credJson);
     // Use JWT with domain-wide delegation to impersonate issac@oktos.com.sg
@@ -265,7 +265,7 @@ async function appendToSheet(sheetId, row) {
     });
     const token = await client.getAccessToken();
 
-    await fetch(
+    const res = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Sheet1!A:Z:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
       {
         method: 'POST',
@@ -276,6 +276,12 @@ async function appendToSheet(sheetId, row) {
         body: JSON.stringify({ values: [row] })
       }
     );
+    const result = await res.json();
+    if (result.error) {
+      console.error('Sheets append failed:', JSON.stringify(result.error));
+    } else {
+      console.log('Sheets write OK:', row[0], row[1], row[2]);
+    }
   } catch (e) {
     console.error('Sheets append error:', e.message);
   }
@@ -362,7 +368,7 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
       if (fileUrl) {
         imageBase64 = await downloadFileAsBase64(fileUrl);
         imageMime = 'image/jpeg';
-        userText = msg.caption || 'Please read this receipt. Extract the vendor name, amount, date, and suggest the correct expense category for JSY Edu. Then confirm it as a recorded transaction.';
+        userText = msg.caption || 'Read this receipt carefully. Extract: (1) vendor/store name, (2) total amount paid in SGD, (3) the date if visible. Then classify it under the correct JSY Edu expense category. Valid categories: Employment Benefits, Transport, Food Costs, Rent, Utilities, IT Services, Marketing, Insurance, Professional Fees, Training, Consultancy, Business Expenses, Cleaning, Printing, Membership, Advertising, Recruitment, General Expenses. End your reply with EXACTLY this line (no variations): "Recorded: [vendor name] — SGD [amount] → [Category]"';
 
         // Auto-file to Drive
         const now = new Date();
@@ -422,14 +428,43 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
 
     await sendMessage(chatId, reply);
 
-    // ── Auto-sync transaction to Sheets if detected ───────────────────────────
-    const txn = parseTransactionFromReply(reply);
-    if (txn) {
-      await appendToSheet(SHEETS.transactions, [
-        txn.date, txn.description, txn.category,
-        txn.amountIn, txn.amountOut, txn.net,
-        txn.month, txn.year, txn.source, txn.notes
-      ]);
+    // ── Receipt photo: write directly to Sheets using targeted extraction ─────
+    if (msg.photo) {
+      const receiptMatch = reply.match(/Recorded:\s*(.+?)\s*[—–-]+\s*SGD\s*([\d,]+(?:\.\d{2})?)\s*→\s*([A-Za-z &]+)/i);
+      if (receiptMatch) {
+        const vendor = receiptMatch[1].trim();
+        const amount = parseFloat(receiptMatch[2].replace(',', ''));
+        const category = receiptMatch[3].trim();
+        const today = new Date();
+        const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+        console.log(`Receipt recording: ${vendor} SGD ${amount} → ${category}`);
+        await appendToSheet(SHEETS.transactions, [
+          today.toLocaleDateString('en-SG'),
+          `${vendor} (receipt)`,
+          category,
+          '',       // amount in — receipts are expenses
+          amount,   // amount out
+          -amount,  // net
+          months[today.getMonth()],
+          today.getFullYear(),
+          'Telegram',
+          'Receipt photo'
+        ]);
+      } else {
+        console.log('Receipt: no "Recorded:" line found in reply — not written to Sheets');
+      }
+    }
+
+    // ── Auto-sync text transactions to Sheets if detected ─────────────────────
+    if (!msg.photo) {
+      const txn = parseTransactionFromReply(reply);
+      if (txn) {
+        await appendToSheet(SHEETS.transactions, [
+          txn.date, txn.description, txn.category,
+          txn.amountIn, txn.amountOut, txn.net,
+          txn.month, txn.year, txn.source, txn.notes
+        ]);
+      }
     }
 
   } catch (err) {
