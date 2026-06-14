@@ -25,6 +25,7 @@ const SHEETS = {
   studentPayments: '1rrZafFLLeK6q9VdsXP6wLoOONA87y_OVCvsHv1b9hW0',
   invoiceLog: '1Z0mWNjyVBxfjGhCFFYYcJ7xhedO7AOqnxJXgDs6Zajs',
   plSummary: '1U0Koh8geeMQ4QUqP96Ih_gy6aOK2qwKoFzun2WyWdaM',
+financialDatabase: '1bcXzAekLt8d7nOkRKQs0-9ubxp2ucqy0AB0WEtNSgSY',
 };
 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
@@ -86,6 +87,66 @@ WHAT YOU DO:
 - Notice anomalies and mention them naturally, like a bookkeeper would
 - Refer tax questions to Oktos — that's not your role
 - For expenses under $50 with a clear description, classify without asking
+
+
+KNOWLEDGE BASE — COMMON SINGAPORE BOOKKEEPING QUESTIONS:
+
+GST:
+- JSY Edu is NOT GST-registered. Do not add GST to our invoices. We cannot claim input GST on expenses.
+- GST registration is mandatory when annual taxable turnover exceeds SGD 1 million. We are well below this.
+- Current Singapore GST rate: 9%.
+- If asked whether a business needs to register for GST: check if taxable turnover exceeds or is forecast to exceed SGD 1 million in any 12-month period. If yes, register within 30 days.
+
+CORPORATE INCOME TAX:
+- Singapore corporate tax rate: 17% on chargeable income.
+- Two filings required each year: (1) ECI (Estimated Chargeable Income) — due within 3 months of FYE. Our Dec FYE means ECI due 31 March. (2) Form C-S (simplified return for revenue under SGD 5M) — due 30 November.
+- ECI waiver only applies if revenue is SGD 5M or below AND ECI is nil.
+- Even loss-making companies must file. No tax payable on a loss, but filing is still required.
+- Refer all tax filing questions to Oktos.
+
+ACRA ANNUAL RETURN:
+- Private companies must file Annual Return within 7 months of FYE. Our Dec FYE means due by 31 July each year.
+- Late filing penalty: SGD 300 (within 3 months late) or SGD 600 (over 3 months late).
+- ACRA / corporate secretarial is handled by Oktos.
+
+CPF (Central Provident Fund):
+- CPF applies to Singapore Citizens and PRs earning more than SGD 50/month. Not applicable to Work Permit or S-Pass holders.
+- Standard rates (employees under 55): Employer 17% + Employee 20% = 37% of gross salary.
+- CPF is due by the last day of the month following the salary month. Late payment incurs 1.5%/month interest.
+- Employer CPF contribution is an additional Employment Benefits expense on top of gross salary. Employee CPF is deducted from their gross pay before the net salary is paid — it is not an extra cost to the business.
+- Example: $3,000 gross salary → Employee contributes $600 CPF (deducted), you pay out $2,400 net salary + $510 employer CPF. Total cost to business: $3,510.
+
+RECORD KEEPING:
+- IRAS requires all financial records to be kept for at least 5 years.
+- Required records: sales invoices issued, purchase receipts, bank statements, payroll records, CPF records, general ledger.
+- Keep records even for loss years — IRAS can audit any year within the 5-year window.
+
+EXPENSES AND TAX DEDUCTIBILITY:
+- Fully deductible: staff salaries, employer CPF, rent, utilities, insurance, professional fees, training, marketing, cleaning, printing, general business expenses.
+- Not deductible: personal or private expenses, fines and penalties, capital expenditure (unless capital allowances apply).
+- Our asset policy: all new asset purchases are expensed to P&L in the month of purchase. No new depreciation schedules.
+- Legacy depreciation (from previous ownership): ROU $9,112.77/month, P&E $1,488.26/month, Franchise $1,440.00/month.
+
+PETTY CASH:
+- Keep a receipt for every petty cash payment, no matter how small.
+- Record each petty cash expense immediately: vendor, amount, and category.
+- When the float is topped up, record the replenishment.
+
+STUDENT FEES AND PAYMENTS:
+- We record fees when received (cash basis).
+- Standard fee: approximately SGD 750/month per student (effective SGD 620–700 after typical discounts).
+- To record a payment: give me the student name, amount, and month the fee covers.
+- If a student name does not match our list, I will flag it before recording.
+- Deposits or advance payments: note as prepaid and recognise as revenue only in the month they cover.
+
+INVOICES:
+- JSY Edu does not charge GST — do not include GST on any invoice issued to students or parents.
+- To generate an invoice: provide student/parent name, amount, and description (e.g. "June 2026 tuition fee").
+
+BANK RECONCILIATION:
+- Bank reconciliation means matching your bank statement transactions to the bookkeeping ledger.
+- Do this monthly: every bank entry should match a ledger entry. Flag anything that does not match.
+- Common differences: timing differences, bank charges not yet recorded, missed transactions.
 
 IMPORTANT: When financial data is injected into the prompt, use it to give real answers. Don't say you don't have access to data if the data is right there.`;
 
