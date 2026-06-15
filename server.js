@@ -228,7 +228,7 @@ async function downloadFileAsBase64(url) {
 }
 
 // ── GOOGLE DRIVE UPLOAD ───────────────────────────────────────────────────────
-async function uploadToDrive(fileName, fileBuffer, mimeType, monthFolderId) {
+async function uploadToDrive(fileName, fileBuffer, mimeType, monthFolderId, category) {
   try {
     // Use service account auth if available, otherwise skip
     const credJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -248,9 +248,15 @@ async function uploadToDrive(fileName, fileBuffer, mimeType, monthFolderId) {
     });
     const token = await client.getAccessToken();
 
+    // Route to category subfolder (create on-demand if missing)
+    let targetFolderId = monthFolderId;
+    if (category) {
+      targetFolderId = await getOrCreateSubfolder(monthFolderId, category, token.token);
+    }
+
     const metadata = {
       name: fileName,
-      parents: [monthFolderId]
+      parents: [targetFolderId]
     };
 
     const form = new FormData();
@@ -305,6 +311,56 @@ const MONTH_FOLDERS = {
   '11 November': '1UbtcetORtsMQg3uh8K5d1KPgRDmongTk',
   '12 December': '1NclXTOotetZngqY7TonG-m3Xi02DQkAQ',
 };
+
+
+// ── DOCUMENT CATEGORIES ───────────────────────────────────────────────────────
+const DOC_CATEGORIES = {
+  BILLS_RECEIPTS: 'Bills & Receipts',
+  INVOICES_ISSUED: 'Invoices Issued',
+  BANK_STATEMENTS: 'Bank Statements',
+  OTHER: 'Other Documents'
+};
+
+// Classify a file into one of the Drive subfolder categories
+function classifyDocument(fileName, caption, isPhoto) {
+  if (isPhoto) return DOC_CATEGORIES.BILLS_RECEIPTS;
+  const text = ((fileName || '') + ' ' + (caption || '')).toLowerCase();
+  if (/statement|bank statement|ocbc|dbs|uob|posb|maybank/.test(text)) return DOC_CATEGORIES.BANK_STATEMENTS;
+  if (/invoice|inv[_\s\-]?\d|invoices issued/.test(text)) return DOC_CATEGORIES.INVOICES_ISSUED;
+  if (/receipt|bill|expense|payment|vendor/.test(text)) return DOC_CATEGORIES.BILLS_RECEIPTS;
+  return DOC_CATEGORIES.OTHER;
+}
+
+// Find an existing subfolder by name inside parentFolderId, or create it
+async function getOrCreateSubfolder(parentFolderId, folderName, token) {
+  try {
+    const q = encodeURIComponent(
+      `name='${folderName}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`
+    );
+    const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const searchData = await searchRes.json();
+    if (searchData.files && searchData.files.length > 0) return searchData.files[0].id;
+
+    // Create it
+    const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: folderName,
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: [parentFolderId]
+      })
+    });
+    const folder = await createRes.json();
+    console.log(`Created subfolder: ${folderName} → ${folder.id}`);
+    return folder.id;
+  } catch (e) {
+    console.error('getOrCreateSubfolder error:', e.message);
+    return parentFolderId; // fallback to month folder
+  }
+}
 
 // ── GOOGLE SHEETS APPEND ──────────────────────────────────────────────────────
 async function appendToSheet(sheetId, row) {
@@ -503,10 +559,10 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
         const ts = now.toISOString().slice(0, 19).replace(/[T:]/g, '-');
         const fileName = `Receipt_${ts}.jpg`;
         const buffer = Buffer.from(imageBase64, 'base64');
-        const driveUrl = await uploadToDrive(fileName, buffer, 'image/jpeg', folderId);
+        const driveUrl = await uploadToDrive(fileName, buffer, 'image/jpeg', folderId, DOC_CATEGORIES.BILLS_RECEIPTS);
 
         if (driveUrl) {
-          await sendMessage(chatId, `📁 Receipt saved to Google Drive (${monthKey})\n${driveUrl}`);
+          await sendMessage(chatId, `📁 Receipt saved → ${monthKey} / ${DOC_CATEGORIES.BILLS_RECEIPTS}\n${driveUrl}`);
         }
         fileHandled = true;
       }
