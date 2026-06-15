@@ -416,55 +416,6 @@ async function getOrCreateSubfolder(parentFolderId, folderName, token) {
 }
 
 
-// ── FILENAME CONVENTION HELPERS ───────────────────────────────────────────────
-// Format: YYYYMMDD_CatCode_Desc_SGDAmount.ext
-function buildFileName(now, category, desc, amount, ext) {
-  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const catCode = {
-    'Bills & Receipts': 'Expense',
-    'Bank Statements': 'BankStmt',
-    'Invoices Issued': 'Invoice',
-    'Other Documents': 'Other'
-  }[category] || 'Other';
-  const cleanDesc = (desc || 'Unknown')
-    .replace(/\.[^.]+$/, '')
-    .replace(/[^\w\s\-]/g, '')
-    .trim()
-    .replace(/\s+/g, '-')
-    .substring(0, 28);
-  const amountPart = amount
-    ? '_SGD' + parseFloat(String(amount).replace(/,/g, '')).toFixed(2)
-    : '';
-  return `${dateStr}_${catCode}_${cleanDesc}${amountPart}.${ext}`;
-}
-
-async function getDriveToken() {
-  const credJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!credJson) return null;
-  const creds = JSON.parse(credJson);
-  const client = new JWT({
-    email: creds.client_email,
-    key: creds.private_key,
-    scopes: ['https://www.googleapis.com/auth/drive'],
-    subject: 'issac@oktos.com.sg'
-  });
-  const t = await client.getAccessToken();
-  return t.token;
-}
-
-async function renameDriveFile(fileId, newName, token) {
-  try {
-    await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name`, {
-      method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newName })
-    });
-    console.log(`Drive rename → ${newName}`);
-  } catch (e) {
-    console.error('renameDriveFile error:', e.message);
-  }
-}
-
 // ── GOOGLE SHEETS APPEND ──────────────────────────────────────────────────────
 async function appendToSheet(sheetId, row) {
   try {
@@ -615,6 +566,7 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
     let imageBase64 = null;
     let imageMime = null;
     let fileHandled = false;
+    let driveFileId = null;
 
     // ── Handle /start command ────────────────────────────────────────────────
     if (userText === '/start') {
@@ -663,7 +615,7 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
         const fileName = `Receipt_${ts}_pending.jpg`; // renamed after Claude extracts vendor/amount
         const buffer = Buffer.from(imageBase64, 'base64');
         const uploadResult = await uploadToDrive(fileName, buffer, 'image/jpeg', folderId, DOC_CATEGORIES.BILLS_RECEIPTS);
-        const driveFileId = uploadResult?.fileId || null;
+        driveFileId = uploadResult?.fileId || null;
         const driveUrl = uploadResult?.url || null;
         if (driveUrl) {
           await sendMessage(chatId, `📁 Receipt saved → ${monthKey} / ${DOC_CATEGORIES.BILLS_RECEIPTS}\n${driveUrl}`);
