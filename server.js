@@ -227,6 +227,59 @@ async function downloadFileAsBase64(url) {
   return buffer.toString('base64');
 }
 
+
+// ── FILENAME HELPERS ──────────────────────────────────────────────────────────
+
+// Build a standardised Drive filename: YYYYMMDD_CatCode_Desc_SGDAmount.ext
+function buildFileName(now, category, desc, amount, ext) {
+  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const catCode = {
+    'Bills & Receipts': 'Expense',
+    'Bank Statements': 'BankStmt',
+    'Invoices Issued': 'Invoice',
+    'Other Documents': 'Other'
+  }[category] || 'Other';
+  const cleanDesc = (desc || 'Unknown')
+    .replace(/\.[^.]+$/, '')          // strip extension
+    .replace(/[^\w\s\-]/g, '')        // remove special chars
+    .trim()
+    .replace(/\s+/g, '-')
+    .substring(0, 28);
+  const amountPart = amount
+    ? '_SGD' + parseFloat(String(amount).replace(/,/g, '')).toFixed(2)
+    : '';
+  return `${dateStr}_${catCode}_${cleanDesc}${amountPart}.${ext}`;
+}
+
+// Get a fresh Drive token (reusable)
+async function getDriveToken() {
+  const credJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!credJson) return null;
+  const creds = JSON.parse(credJson);
+  const client = new JWT({
+    email: creds.client_email,
+    key: creds.private_key,
+    scopes: ['https://www.googleapis.com/auth/drive'],
+    subject: 'issac@oktos.com.sg'
+  });
+  const t = await client.getAccessToken();
+  return t.token;
+}
+
+// Rename a file already in Drive
+async function renameDriveFile(fileId, newName, token) {
+  try {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName })
+    });
+    console.log(`Drive rename → ${newName}`);
+  } catch (e) {
+    console.error('renameDriveFile error:', e.message);
+  }
+}
+
 // ── GOOGLE DRIVE UPLOAD ───────────────────────────────────────────────────────
 async function uploadToDrive(fileName, fileBuffer, mimeType, monthFolderId, category) {
   try {
@@ -280,7 +333,7 @@ async function uploadToDrive(fileName, fileBuffer, mimeType, monthFolderId, cate
       console.error('Drive upload failed:', JSON.stringify(data));
       return null;
     }
-    return `https://drive.google.com/file/d/${data.id}`;
+    return { url: `https://drive.google.com/file/d/${data.id}`, fileId: data.id };
   } catch (e) {
     console.error('Drive upload error:', e.message);
     return null;
@@ -359,6 +412,56 @@ async function getOrCreateSubfolder(parentFolderId, folderName, token) {
   } catch (e) {
     console.error('getOrCreateSubfolder error:', e.message);
     return parentFolderId; // fallback to month folder
+  }
+}
+
+
+// ── FILENAME CONVENTION HELPERS ───────────────────────────────────────────────
+// Format: YYYYMMDD_CatCode_Desc_SGDAmount.ext
+function buildFileName(now, category, desc, amount, ext) {
+  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const catCode = {
+    'Bills & Receipts': 'Expense',
+    'Bank Statements': 'BankStmt',
+    'Invoices Issued': 'Invoice',
+    'Other Documents': 'Other'
+  }[category] || 'Other';
+  const cleanDesc = (desc || 'Unknown')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^\w\s\-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .substring(0, 28);
+  const amountPart = amount
+    ? '_SGD' + parseFloat(String(amount).replace(/,/g, '')).toFixed(2)
+    : '';
+  return `${dateStr}_${catCode}_${cleanDesc}${amountPart}.${ext}`;
+}
+
+async function getDriveToken() {
+  const credJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!credJson) return null;
+  const creds = JSON.parse(credJson);
+  const client = new JWT({
+    email: creds.client_email,
+    key: creds.private_key,
+    scopes: ['https://www.googleapis.com/auth/drive'],
+    subject: 'issac@oktos.com.sg'
+  });
+  const t = await client.getAccessToken();
+  return t.token;
+}
+
+async function renameDriveFile(fileId, newName, token) {
+  try {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName })
+    });
+    console.log(`Drive rename → ${newName}`);
+  } catch (e) {
+    console.error('renameDriveFile error:', e.message);
   }
 }
 
@@ -557,10 +660,11 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
         const monthKey = `${String(now.getMonth()+1).padStart(2,'0')} ${['January','February','March','April','May','June','July','August','September','October','November','December'][now.getMonth()]}`;
         const folderId = MONTH_FOLDERS[monthKey] || DRIVE_FOLDER_ID;
         const ts = now.toISOString().slice(0, 19).replace(/[T:]/g, '-');
-        const fileName = `Receipt_${ts}.jpg`;
+        const fileName = `Receipt_${ts}_pending.jpg`; // renamed after Claude extracts vendor/amount
         const buffer = Buffer.from(imageBase64, 'base64');
-        const driveUrl = await uploadToDrive(fileName, buffer, 'image/jpeg', folderId, DOC_CATEGORIES.BILLS_RECEIPTS);
-
+        const uploadResult = await uploadToDrive(fileName, buffer, 'image/jpeg', folderId, DOC_CATEGORIES.BILLS_RECEIPTS);
+        const driveFileId = uploadResult?.fileId || null;
+        const driveUrl = uploadResult?.url || null;
         if (driveUrl) {
           await sendMessage(chatId, `📁 Receipt saved → ${monthKey} / ${DOC_CATEGORIES.BILLS_RECEIPTS}\n${driveUrl}`);
         }
@@ -578,15 +682,19 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
 
       if (fileUrl) {
         const buffer = Buffer.from(await fetch(fileUrl).then(r => r.arrayBuffer()));
-        const driveUrl = await uploadToDrive(doc.file_name, buffer, doc.mime_type, folderId);
+        const docCategory = classifyDocument(doc.file_name, msg.caption, false);
+        const docExt = (doc.file_name || 'file').split('.').pop().toLowerCase() || 'bin';
+        const docNow = new Date();
+        const docName = buildFileName(docNow, docCategory, doc.file_name, null, docExt);
+        const docUploadResult = await uploadToDrive(docName, buffer, doc.mime_type, folderId, docCategory);
+        const docDriveUrl = docUploadResult?.url || null;
 
-        if (driveUrl) {
-          await sendMessage(chatId, `📁 "${doc.file_name}" saved to Google Drive (${monthKey})\n${driveUrl}\n\nWhat would you like me to do with this file?`);
+        if (docDriveUrl) {
+          await sendMessage(chatId, `📁 Saved → ${monthKey} / ${docCategory}\n${docName}\n${docDriveUrl}\n\nWhat would you like me to do with this file?`);
         } else {
           await sendMessage(chatId, `Received "${doc.file_name}". Note: Google Drive auto-filing needs service account setup. What would you like me to do with this?`);
         }
-        userText = msg.caption || `File uploaded: ${doc.file_name}. Acknowledge receipt and ask what to do with it.`;
-        fileHandled = true;
+fileHandled = true;
       }
     }
 
@@ -630,13 +738,19 @@ app.post(`/webhook/${WEBHOOK_SECRET}`, async (req, res) => {
 
     await sendMessage(chatId, reply);
 
-    // ── Receipt photo: write directly to Sheets using targeted extraction ─────
+    // ── Receipt photo: rename in Drive + write to Sheets ─────────────────────
     if (msg.photo) {
       const receiptMatch = reply.match(/Recorded:\s*(.+?)\s*[—–-]+\s*SGD\s*([\d,]+(?:\.\d{2})?)\s*→\s*([A-Za-z &]+)/i);
       if (receiptMatch) {
         const vendor = receiptMatch[1].trim();
         const amount = parseFloat(receiptMatch[2].replace(',', ''));
         const category = receiptMatch[3].trim();
+        // Rename the temp Drive file to the proper standardised name
+        if (driveFileId) {
+          const properName = buildFileName(new Date(), DOC_CATEGORIES.BILLS_RECEIPTS, vendor, receiptMatch[2], 'jpg');
+          const renameToken = await getDriveToken().catch(() => null);
+          if (renameToken) await renameDriveFile(driveFileId, properName, renameToken);
+        }
         const today = new Date();
         const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
         console.log(`Receipt recording: ${vendor} SGD ${amount} → ${category}`);
